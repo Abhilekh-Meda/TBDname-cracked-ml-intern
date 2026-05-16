@@ -21,14 +21,7 @@ dependencies = [
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
     "whoosh>=2.7.4",
-    # Web backend dependencies
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
     "httpx>=0.27.0",
-    "websockets>=13.0",
-    "apscheduler>=3.10,<4",
-    "pymongo>=4.17.0",
-    "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +39,7 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.2.0",
     "ruff>=0.15.12",
+    "fastapi>=0.115.0",
 ]
 
 # All dependencies (eval + dev)

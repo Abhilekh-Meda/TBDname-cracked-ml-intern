@@ -13,7 +13,6 @@ from agent.messaging.gateway import NotificationGateway
 from agent.messaging.models import NotificationRequest, NotificationResult
 from agent.messaging.slack import SlackProvider, _format_slack_mrkdwn
 from agent.tools.notify_tool import notify_handler
-from backend.session_manager import AgentSession, SessionManager
 
 
 class DummyToolRouter:
@@ -481,31 +480,3 @@ async def test_turn_complete_can_be_disabled_by_custom_auto_event_config():
     assert gateway.enqueued == []
 
 
-def test_session_manager_updates_notification_destinations_in_session_info():
-    config = _config_with_messaging(allow_auto_events=True)
-    manager = SessionManager(
-        str(Path(__file__).resolve().parents[2] / "configs" / "cli_agent_config.json")
-    )
-    manager.config = config
-    manager.sessions = {}
-
-    session = _test_session(config, RecordingGateway(), session_id="sess-manager")
-    manager.sessions["sess-manager"] = AgentSession(
-        session_id="sess-manager",
-        session=session,
-        tool_router=DummyToolRouter(),
-        submission_queue=asyncio.Queue(),
-    )
-
-    updated = manager.set_notification_destinations(
-        "sess-manager",
-        ["slack.ops", "slack.ops"],
-    )
-
-    assert updated == ["slack.ops"]
-    info = manager.get_session_info("sess-manager")
-    assert info is not None
-    assert info["notification_destinations"] == ["slack.ops"]
-
-    with pytest.raises(ValueError):
-        manager.set_notification_destinations("sess-manager", ["slack.unknown"])
