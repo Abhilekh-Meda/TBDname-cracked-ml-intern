@@ -14,13 +14,13 @@ from agent.replication.types import (
 
 
 def test_rubric_node_with_no_children_is_leaf():
-    node = RubricNode(id="a", description="x", check="cmd")
+    node = RubricNode(id="a", description="x")
     assert node.is_leaf()
 
 
 def test_rubric_node_with_children_is_not_leaf():
-    child = RubricNode(id="b", description="y", check="cmd2")
-    node = RubricNode(id="a", description="x", check="", children=[child])
+    child = RubricNode(id="b", description="y")
+    node = RubricNode(id="a", description="x", children=[child])
     assert not node.is_leaf()
 
 
@@ -28,25 +28,25 @@ def test_rubric_node_with_children_is_not_leaf():
 
 
 def test_all_leaves_on_leaf_returns_self():
-    node = RubricNode(id="a", description="x", check="cmd")
+    node = RubricNode(id="a", description="x")
     assert node.all_leaves() == [node]
 
 
 def test_all_leaves_returns_only_leaf_nodes():
-    leaf1 = RubricNode(id="c", description="c", check="cmd_c")
-    leaf2 = RubricNode(id="d", description="d", check="cmd_d")
-    mid = RubricNode(id="b", description="b", check="", children=[leaf1, leaf2])
-    root = RubricNode(id="a", description="a", check="", children=[mid])
+    leaf1 = RubricNode(id="c", description="c")
+    leaf2 = RubricNode(id="d", description="d")
+    mid = RubricNode(id="b", description="b", children=[leaf1, leaf2])
+    root = RubricNode(id="a", description="a", children=[mid])
 
     leaves = root.all_leaves()
     assert leaves == [leaf1, leaf2]
 
 
 def test_all_leaves_flattens_deep_tree():
-    leaf = RubricNode(id="deep", description="deep", check="cmd")
-    mid2 = RubricNode(id="m2", description="m2", check="", children=[leaf])
-    mid1 = RubricNode(id="m1", description="m1", check="", children=[mid2])
-    root = RubricNode(id="root", description="root", check="", children=[mid1])
+    leaf = RubricNode(id="deep", description="deep")
+    mid2 = RubricNode(id="m2", description="m2", children=[leaf])
+    mid1 = RubricNode(id="m1", description="m1", children=[mid2])
+    root = RubricNode(id="root", description="root", children=[mid1])
 
     assert root.all_leaves() == [leaf]
 
@@ -55,41 +55,40 @@ def test_all_leaves_flattens_deep_tree():
 
 
 def test_leaf_passes_when_status_is_pass():
-    node = RubricNode(id="a", description="x", check="cmd", status=RubricStatus.PASS)
+    node = RubricNode(id="a", description="x", status=RubricStatus.PASS)
     assert node.passed()
 
 
 def test_leaf_fails_when_status_is_fail():
-    node = RubricNode(id="a", description="x", check="cmd", status=RubricStatus.FAIL)
+    node = RubricNode(id="a", description="x", status=RubricStatus.FAIL)
     assert not node.passed()
 
 
 def test_leaf_fails_when_status_is_pending():
-    node = RubricNode(id="a", description="x", check="cmd", status=RubricStatus.PENDING)
+    node = RubricNode(id="a", description="x", status=RubricStatus.PENDING)
     assert not node.passed()
 
 
 def test_parent_passes_when_all_leaves_pass():
-    leaf1 = RubricNode(id="c", description="c", check="", status=RubricStatus.PASS)
-    leaf2 = RubricNode(id="d", description="d", check="", status=RubricStatus.PASS)
-    parent = RubricNode(id="p", description="p", check="", children=[leaf1, leaf2])
+    leaf1 = RubricNode(id="c", description="c", status=RubricStatus.PASS)
+    leaf2 = RubricNode(id="d", description="d", status=RubricStatus.PASS)
+    parent = RubricNode(id="p", description="p", children=[leaf1, leaf2])
     assert parent.passed()
 
 
 def test_parent_fails_when_any_leaf_fails():
-    leaf1 = RubricNode(id="c", description="c", check="", status=RubricStatus.PASS)
-    leaf2 = RubricNode(id="d", description="d", check="", status=RubricStatus.FAIL)
-    parent = RubricNode(id="p", description="p", check="", children=[leaf1, leaf2])
+    leaf1 = RubricNode(id="c", description="c", status=RubricStatus.PASS)
+    leaf2 = RubricNode(id="d", description="d", status=RubricStatus.FAIL)
+    parent = RubricNode(id="p", description="p", children=[leaf1, leaf2])
     assert not parent.passed()
 
 
 def test_parent_ignores_own_status_and_delegates_to_children():
     # A non-leaf node's own status field is not consulted — children determine pass/fail.
-    leaf = RubricNode(id="c", description="c", check="", status=RubricStatus.PASS)
+    leaf = RubricNode(id="c", description="c", status=RubricStatus.PASS)
     parent = RubricNode(
         id="p",
         description="p",
-        check="",
         status=RubricStatus.FAIL,  # should be ignored
         children=[leaf],
     )
@@ -143,7 +142,7 @@ def test_metric_result_fields():
 
 
 def _leaf(node_id: str) -> RubricNode:
-    return RubricNode(id=node_id, description="x", check="cmd")
+    return RubricNode(id=node_id, description="x")
 
 
 def test_paper_task_defaults():

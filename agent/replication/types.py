@@ -24,7 +24,6 @@ class ResourceStatus(str, Enum):
 class RubricNode:
     id: str
     description: str
-    check: str  # shell command or grep pattern to verify this node
     parent_id: Optional[str] = None
     status: RubricStatus = RubricStatus.PENDING
     children: list[RubricNode] = field(default_factory=list)
@@ -71,7 +70,6 @@ class PaperReading:
     title: str
     github_url: str
     metrics: list[MetricResult]
-    eval_command_hint: str
 
 
 @dataclass

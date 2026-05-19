@@ -52,17 +52,12 @@ _SUBMIT_TOOL_SPEC: dict[str, Any] = {
                     },
                     "minItems": 1,
                 },
-                "eval_command_hint": {
-                    "type": "string",
-                    "description": "Likely eval command from README or code, empty string if unclear",
-                },
             },
             "required": [
                 "arxiv_id",
                 "title",
                 "github_url",
                 "metrics",
-                "eval_command_hint",
             ],
         },
     },
@@ -86,7 +81,6 @@ Given a paper identifier (arxiv ID, URL, or title), do the following:
    - The primary headline metric the authors emphasize (first in the list)
    - Any closely related secondary metrics (e.g. mAP@50 if primary is mAP@75, top-5 if primary is top-1)
    - The exact numeric values and the dataset/split each was measured on
-   - Any eval command hint from the README or paper
 
 4. Call submit_paper_reading with your findings.
 
@@ -137,7 +131,6 @@ async def run_paper_reader(paper_input: str, session: Any) -> PaperReading | Non
             title=result["title"],
             github_url=result.get("github_url", ""),
             metrics=metrics,
-            eval_command_hint=result.get("eval_command_hint", ""),
         )
     except (KeyError, TypeError, ValueError):
         return None
