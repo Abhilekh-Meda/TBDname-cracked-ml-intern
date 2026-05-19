@@ -214,14 +214,18 @@ async def _compact_messages(
     model: str,
     hf_token: str | None,
     session: Any,
-) -> list[Message]:
-    """Summarize the middle of the message history, keeping system + first user + recent tail."""
+) -> list[Message] | None:
+    """Summarize the middle of the message history, keeping system + first user + recent tail.
+
+    Returns None if there is nothing in the middle to summarize (individual messages are too
+    large to help with compaction).
+    """
     _TAIL = 8
     head = messages[:2]
     tail = messages[-_TAIL:] if len(messages) > 2 + _TAIL else messages[2:]
     middle = messages[2: len(messages) - _TAIL] if len(messages) > 2 + _TAIL else []
     if not middle:
-        return messages
+        return None
     summary_text, _ = await summarize_messages(
         middle,
         model_name=model,
@@ -304,10 +308,15 @@ async def run_rubric_builder(
 
         if not _compacted and _total_tokens >= _CONTEXT_WARN:
             _compacted = True
-            await _log("Compacting context to continue")
-            messages = await _compact_messages(
+            compacted = await _compact_messages(
                 messages, model, getattr(session, "hf_token", None), session
             )
+            if compacted is None:
+                raise RubricBuildError(
+                    "Context high but message history too short to compact", root, frontier
+                )
+            await _log("Compacted context to continue")
+            messages = compacted
 
         try:
             _msgs, _tools = with_prompt_caching(messages, tool_specs, llm_params.get("model"))

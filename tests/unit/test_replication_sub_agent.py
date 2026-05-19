@@ -93,6 +93,34 @@ async def test_sub_agent_compacts_when_summary_prompt_provided():
 
 
 @pytest.mark.asyncio
+async def test_sub_agent_fails_when_summary_prompt_given_but_history_too_short():
+    """Context high, summary_prompt provided, but too few messages to compact → returns failure."""
+    session = _session()
+    resp = _make_response(content="thinking", total_tokens=171_000)
+
+    with patch("agent.replication._sub_agent.acompletion", new_callable=AsyncMock) as mock_llm, \
+         patch("agent.replication._sub_agent._resolve_llm_params", return_value={"model": "test"}), \
+         patch("agent.replication._sub_agent.with_prompt_caching", side_effect=lambda m, t, _: (m, t)), \
+         patch("agent.replication._sub_agent.check_for_doom_loop", return_value=None), \
+         patch("agent.replication._sub_agent.telemetry.record_llm_call", new_callable=AsyncMock), \
+         patch("agent.replication._sub_agent.summarize_messages", new_callable=AsyncMock) as mock_s:
+
+        mock_llm.return_value = resp
+        result, ok = await run_sub_agent(
+            messages=_base_messages(),  # only 2 messages — middle will be empty
+            tool_specs=[],
+            submit_tool_name="submit_result",
+            session=session,
+            agent_id="test",
+            agent_label="test",
+            summary_prompt="summarize this",
+        )
+
+    assert not ok
+    mock_s.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_sub_agent_nudges_when_no_summary_prompt():
     """When context hits 170k and no summary_prompt, a nudge message is appended instead."""
     session = _session()

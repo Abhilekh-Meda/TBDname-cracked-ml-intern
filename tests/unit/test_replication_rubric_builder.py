@@ -379,8 +379,8 @@ async def test_compact_messages_summarizes_middle_and_keeps_head_tail():
 
 
 @pytest.mark.asyncio
-async def test_compact_messages_skips_when_nothing_to_summarize():
-    """Fewer messages than head + tail → nothing in the middle → returns unchanged."""
+async def test_compact_messages_returns_none_when_nothing_to_summarize():
+    """Fewer messages than head + tail → nothing in the middle → returns None."""
     messages = [
         Message(role="system", content="sys"),
         Message(role="user", content="first"),
@@ -391,7 +391,27 @@ async def test_compact_messages_skips_when_nothing_to_summarize():
         result = await _compact_messages(messages, "test-model", None, SimpleNamespace())
 
     mock_s.assert_not_called()
-    assert result == messages
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_rubric_builder_raises_when_compaction_impossible():
+    """If context is high but message list is too short to compact, RubricBuildError is raised."""
+    session = _session()
+    resp = _make_response(content="thinking", total_tokens=171_000)
+
+    with patch("agent.replication.rubric_builder.acompletion", new_callable=AsyncMock) as mock_llm, \
+         patch("agent.replication.rubric_builder._resolve_llm_params", return_value={"model": "test"}), \
+         patch("agent.replication.rubric_builder.with_prompt_caching", side_effect=lambda m, t, _: (m, t)), \
+         patch("agent.replication.rubric_builder.check_for_doom_loop", return_value=None), \
+         patch("agent.replication.rubric_builder.telemetry.record_llm_call", new_callable=AsyncMock), \
+         patch("agent.replication.rubric_builder._compact_messages", return_value=None):
+
+        mock_llm.return_value = resp
+        with pytest.raises(RubricBuildError) as exc_info:
+            await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)
+
+    assert "too short to compact" in str(exc_info.value)
 
 
 # ── run_rubric_builder — error paths ─────────────────────────────────────
@@ -419,22 +439,24 @@ async def test_run_rubric_builder_raises_on_iteration_limit():
 
 @pytest.mark.asyncio
 async def test_run_rubric_builder_raises_on_context_max():
-    """Context hits 190k even after compaction → RubricBuildError."""
+    """Context hits 190k even after successful compaction → RubricBuildError."""
     session = _session()
 
-    # Iteration 0: tokens hit 170k → compaction triggered, no tool calls → nudge loop continues
+    # Iteration 0: tokens hit 170k → compaction succeeds (mocked), no tool calls → loop continues
     resp1 = _make_response(content="thinking", total_tokens=171_000)
-    # Iteration 1: tokens still at 190k → raises
+    # Iteration 1: tokens now at 190k → raises
     resp2 = _make_response(content="still thinking", total_tokens=191_000)
+
+    async def fake_compact(messages, model, hf_token, session):
+        return messages  # compaction succeeds
 
     with patch("agent.replication.rubric_builder.acompletion", new_callable=AsyncMock) as mock_llm, \
          patch("agent.replication.rubric_builder._resolve_llm_params", return_value={"model": "test"}), \
          patch("agent.replication.rubric_builder.with_prompt_caching", side_effect=lambda m, t, _: (m, t)), \
          patch("agent.replication.rubric_builder.check_for_doom_loop", return_value=None), \
          patch("agent.replication.rubric_builder.telemetry.record_llm_call", new_callable=AsyncMock), \
-         patch("agent.replication.rubric_builder.summarize_messages", new_callable=AsyncMock) as mock_s:
+         patch("agent.replication.rubric_builder._compact_messages", fake_compact):
 
-        mock_s.return_value = ("summary", 100)
         mock_llm.side_effect = [resp1, resp2]
         with pytest.raises(RubricBuildError) as exc_info:
             await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)

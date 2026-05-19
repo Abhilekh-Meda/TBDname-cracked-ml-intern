@@ -95,14 +95,16 @@ async def run_sub_agent(
             await _log("Context limit reached — aborting")
             return None, False
 
-        if not _compacted and _total_tokens >= _CONTEXT_WARN and summary_prompt is not None:
+        if not _compacted and _total_tokens >= _CONTEXT_WARN:
             _compacted = True
-            await _log("Compacting context to continue")
-            _TAIL = 8
-            head = messages[:2]
-            tail = messages[-_TAIL:] if len(messages) > 2 + _TAIL else messages[2:]
-            middle = messages[2: len(messages) - _TAIL] if len(messages) > 2 + _TAIL else []
-            if middle:
+            if summary_prompt is not None:
+                _TAIL = 8
+                head = messages[:2]
+                tail = messages[-_TAIL:] if len(messages) > 2 + _TAIL else messages[2:]
+                middle = messages[2: len(messages) - _TAIL] if len(messages) > 2 + _TAIL else []
+                if not middle:
+                    await _log("Context high but history too short to compact — aborting")
+                    return None, False
                 summary_text, _ = await summarize_messages(
                     middle,
                     model_name=model,
@@ -111,18 +113,18 @@ async def run_sub_agent(
                     session=session,
                     kind="replication",
                 )
+                await _log("Compacted context to continue")
                 messages = head + [Message(role="user", content=f"[Context summary]\n{summary_text}")] + tail
-        elif not _compacted and _total_tokens >= _CONTEXT_WARN:
-            _compacted = True
-            messages.append(
-                Message(
-                    role="user",
-                    content=(
-                        f"[SYSTEM: 75% of context used. Wrap up and call "
-                        f"{submit_tool_name} with your findings now.]"
-                    ),
+            else:
+                messages.append(
+                    Message(
+                        role="user",
+                        content=(
+                            f"[SYSTEM: 75% of context used. Wrap up and call "
+                            f"{submit_tool_name} with your findings now.]"
+                        ),
+                    )
                 )
-            )
 
         try:
             _msgs, _tools = with_prompt_caching(
