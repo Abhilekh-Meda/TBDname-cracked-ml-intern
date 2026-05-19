@@ -52,9 +52,6 @@ frontend/yarn-error.log*
 # Docker
 .docker/
 
-# Eval (stale)
-eval/
-
 # Project-specific
 CLAUDE.md
 paper_reference/
