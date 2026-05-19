@@ -7,9 +7,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from litellm.types.utils import ChatCompletionMessageToolCall
 
+from litellm import Message
+
 from agent.replication.rubric_builder import (
+    RubricBuildError,
     _apply_expansions,
-    _fallback_rubric,
+    _compact_messages,
     _format_frontier,
     run_rubric_builder,
 )
@@ -189,33 +192,6 @@ def test_format_frontier_empty():
     assert _format_frontier([]) == ""
 
 
-# ── _fallback_rubric ──────────────────────────────────────────────────────
-
-
-def test_fallback_rubric_has_two_children():
-    rubric = _fallback_rubric(_reading())
-    assert len(rubric.children) == 2
-
-
-def test_fallback_rubric_uses_primary_metric():
-    rubric = _fallback_rubric(_reading(metrics=[MetricResult(name="F1", value=88.0, dataset="test")]))
-    result_node = next(c for c in rubric.children if c.id == "result")
-    assert "F1" in result_node.description
-    assert "88.0" in result_node.description
-
-
-def test_fallback_rubric_threshold_is_95_percent():
-    rubric = _fallback_rubric(_reading(metrics=[MetricResult(name="acc", value=80.0, dataset="val")]))
-    result_node = next(c for c in rubric.children if c.id == "result")
-    assert "76.0" in result_node.description
-
-
-def test_fallback_rubric_all_leaves():
-    rubric = _fallback_rubric(_reading())
-    for leaf in rubric.all_leaves():
-        assert leaf.is_leaf()
-
-
 # ── run_rubric_builder agent loop ─────────────────────────────────────────
 
 
@@ -227,7 +203,7 @@ def _make_tool_call(call_id: str, name: str, args: dict) -> ChatCompletionMessag
     )
 
 
-def _make_response(tool_calls=None, content=""):
+def _make_response(tool_calls=None, content="", total_tokens=100):
     msg = SimpleNamespace(
         content=content,
         tool_calls=tool_calls or [],
@@ -238,7 +214,7 @@ def _make_response(tool_calls=None, content=""):
     )
     resp = SimpleNamespace(
         choices=[choice],
-        usage=SimpleNamespace(total_tokens=100),
+        usage=SimpleNamespace(total_tokens=total_tokens),
     )
     return resp
 
@@ -328,8 +304,8 @@ async def test_run_rubric_builder_two_layers():
 
 
 @pytest.mark.asyncio
-async def test_run_rubric_builder_falls_back_on_llm_error():
-    """If LLM errors immediately, fallback rubric is returned."""
+async def test_run_rubric_builder_raises_on_llm_error():
+    """If LLM errors immediately, RubricBuildError is raised carrying partial rubric and frontier."""
     session = _session()
 
     with patch("agent.replication.rubric_builder.acompletion", new_callable=AsyncMock) as mock_llm, \
@@ -339,9 +315,11 @@ async def test_run_rubric_builder_falls_back_on_llm_error():
          patch("agent.replication.rubric_builder.telemetry.record_llm_call", new_callable=AsyncMock):
 
         mock_llm.side_effect = Exception("LLM unavailable")
-        rubric = await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)
+        with pytest.raises(RubricBuildError) as exc_info:
+            await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)
 
-    assert len(rubric.children) == 2
+    assert exc_info.value.partial_rubric.id == "root"
+    assert isinstance(exc_info.value.frontier, list)
 
 
 @pytest.mark.asyncio
@@ -377,3 +355,131 @@ async def test_run_rubric_builder_tool_call_before_submit():
 
     assert len(rubric.children) == 1
     assert rubric.children[0].description == "mAP >= 40.0 on COCO val"
+
+
+# ── _compact_messages ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compact_messages_summarizes_middle_and_keeps_head_tail():
+    messages = (
+        [Message(role="system", content="sys"), Message(role="user", content="first")]
+        + [Message(role="user", content=f"middle {i}") for i in range(12)]
+        + [Message(role="user", content=f"tail {i}") for i in range(8)]
+    )
+
+    with patch("agent.replication.rubric_builder.summarize_messages", new_callable=AsyncMock) as mock_s:
+        mock_s.return_value = ("the summary", 50)
+        result = await _compact_messages(messages, "test-model", None, SimpleNamespace())
+
+    assert result[0].content == "sys"
+    assert result[1].content == "first"
+    assert "the summary" in result[2].content
+    assert len(result) == 2 + 1 + 8  # head + summary + tail
+
+
+@pytest.mark.asyncio
+async def test_compact_messages_skips_when_nothing_to_summarize():
+    """Fewer messages than head + tail → nothing in the middle → returns unchanged."""
+    messages = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="first"),
+        Message(role="user", content="recent"),
+    ]
+
+    with patch("agent.replication.rubric_builder.summarize_messages", new_callable=AsyncMock) as mock_s:
+        result = await _compact_messages(messages, "test-model", None, SimpleNamespace())
+
+    mock_s.assert_not_called()
+    assert result == messages
+
+
+# ── run_rubric_builder — error paths ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_rubric_builder_raises_on_iteration_limit():
+    """Loop exhausts all 60 iterations without submit_layer → RubricBuildError."""
+    session = _session()
+
+    with patch("agent.replication.rubric_builder.acompletion", new_callable=AsyncMock) as mock_llm, \
+         patch("agent.replication.rubric_builder._resolve_llm_params", return_value={"model": "test"}), \
+         patch("agent.replication.rubric_builder.with_prompt_caching", side_effect=lambda m, t, _: (m, t)), \
+         patch("agent.replication.rubric_builder.check_for_doom_loop", return_value=None), \
+         patch("agent.replication.rubric_builder.telemetry.record_llm_call", new_callable=AsyncMock):
+
+        mock_llm.return_value = _make_response(content="still thinking")
+        with pytest.raises(RubricBuildError) as exc_info:
+            await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)
+
+    assert "Iteration limit" in str(exc_info.value)
+    assert exc_info.value.partial_rubric.id == "root"
+    assert isinstance(exc_info.value.frontier, list)
+
+
+@pytest.mark.asyncio
+async def test_run_rubric_builder_raises_on_context_max():
+    """Context hits 190k even after compaction → RubricBuildError."""
+    session = _session()
+
+    # Iteration 0: tokens hit 170k → compaction triggered, no tool calls → nudge loop continues
+    resp1 = _make_response(content="thinking", total_tokens=171_000)
+    # Iteration 1: tokens still at 190k → raises
+    resp2 = _make_response(content="still thinking", total_tokens=191_000)
+
+    with patch("agent.replication.rubric_builder.acompletion", new_callable=AsyncMock) as mock_llm, \
+         patch("agent.replication.rubric_builder._resolve_llm_params", return_value={"model": "test"}), \
+         patch("agent.replication.rubric_builder.with_prompt_caching", side_effect=lambda m, t, _: (m, t)), \
+         patch("agent.replication.rubric_builder.check_for_doom_loop", return_value=None), \
+         patch("agent.replication.rubric_builder.telemetry.record_llm_call", new_callable=AsyncMock), \
+         patch("agent.replication.rubric_builder.summarize_messages", new_callable=AsyncMock) as mock_s:
+
+        mock_s.return_value = ("summary", 100)
+        mock_llm.side_effect = [resp1, resp2]
+        with pytest.raises(RubricBuildError) as exc_info:
+            await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)
+
+    assert "Context limit" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_run_rubric_builder_compacts_at_170k_and_continues():
+    """Context hits 170k → _compact_messages called → loop continues to completion."""
+    layer = _make_tool_call(
+        "tc1",
+        "submit_layer",
+        {
+            "expansions": [
+                {
+                    "parent_id": "root",
+                    "children": [
+                        {"id": "env", "description": "env works", "is_leaf": True},
+                    ],
+                }
+            ]
+        },
+    )
+
+    session = _session()
+    resp1 = _make_response(content="reading paper", total_tokens=171_000)
+    resp2 = _make_response(tool_calls=[layer])
+
+    compact_calls = []
+
+    async def fake_compact(messages, model, hf_token, session):
+        compact_calls.append(True)
+        return messages  # return unchanged so loop can continue
+
+    with patch("agent.replication.rubric_builder.acompletion", new_callable=AsyncMock) as mock_llm, \
+         patch("agent.replication.rubric_builder._resolve_llm_params", return_value={"model": "test"}), \
+         patch("agent.replication.rubric_builder.with_prompt_caching", side_effect=lambda m, t, _: (m, t)), \
+         patch("agent.replication.rubric_builder.check_for_doom_loop", return_value=None), \
+         patch("agent.replication.rubric_builder.telemetry.record_llm_call", new_callable=AsyncMock), \
+         patch("agent.replication.rubric_builder._compact_messages", fake_compact):
+
+        mock_llm.side_effect = [resp1, resp2]
+        rubric = await run_rubric_builder("2406.04692", "https://github.com/org/repo", _reading(), session)
+
+    assert compact_calls, "_compact_messages should have been called"
+    assert rubric.id == "root"
+    assert len(rubric.children) == 1

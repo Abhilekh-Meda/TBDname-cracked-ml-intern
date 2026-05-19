@@ -63,6 +63,22 @@ _SUBMIT_TOOL_SPEC: dict[str, Any] = {
     },
 }
 
+_SUMMARY_PROMPT = (
+    "You are summarizing a conversation in which an AI agent is reading an ML paper to extract "
+    "structured replication metadata. The agent's job is to find: the paper's arxiv ID, title, "
+    "GitHub repo URL, the main evaluation metrics (name, numeric value, and dataset/split for "
+    "each), and then call a submit tool to deliver these as structured output. The agent reads "
+    "the paper section by section using tools and stops only when it has called submit_paper_reading.\n\n"
+    "Summarize what has happened in this conversation so far. Include:\n"
+    "- The paper being read: title, arxiv_id, and github_url if found\n"
+    "- Every paper section that was read and the key information extracted from it\n"
+    "- All metrics found so far: metric name, numeric value, and the dataset/split it was measured on\n"
+    "- What information is still missing before submit_paper_reading can be called\n"
+    "This summary will replace the full conversation history and must contain everything the "
+    "agent needs to finish extracting the paper metadata and submit."
+    "Include important details, it is better to give too much information than too little."
+)
+
 _SYSTEM_PROMPT = """\
 You are a paper reading agent for ML paper replication. Your job is to extract
 structured information from a paper so it can be replicated.
@@ -112,6 +128,7 @@ async def run_paper_reader(paper_input: str, session: Any) -> PaperReading | Non
         session=session,
         agent_id=agent_id,
         agent_label=f"paper-reader: {paper_input[:50]}",
+        summary_prompt=_SUMMARY_PROMPT,
     )
 
     if not ok or result is None:

@@ -186,7 +186,7 @@ async def test_ingest_raises_when_paper_reader_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ingest_uses_degraded_report_when_resource_checker_fails(monkeypatch):
+async def test_ingest_raises_when_resource_checker_fails(monkeypatch):
     reading = _reading()
 
     async def fake_paper_reader(paper_input, session):
@@ -195,21 +195,11 @@ async def test_ingest_uses_degraded_report_when_resource_checker_fails(monkeypat
     async def fake_resource_checker(arxiv_id, github_url, session):
         return None
 
-    async def fake_fetch_metadata(arxiv_id):
-        return {}
-
-    async def fake_rubric_builder(arxiv_id, github_url, reading, session):
-        return _rubric()
-
     monkeypatch.setattr("agent.replication.ingestion.run_paper_reader", fake_paper_reader)
     monkeypatch.setattr("agent.replication.ingestion.run_resource_checker", fake_resource_checker)
-    monkeypatch.setattr("agent.replication.ingestion._fetch_paper_metadata", fake_fetch_metadata)
-    monkeypatch.setattr("agent.replication.ingestion.run_rubric_builder", fake_rubric_builder)
 
-    task = await ingest("2406.04692", _session())
-
-    assert task.repo_ready is False
-    assert "failed" in task.repo_notes.lower()
+    with pytest.raises(ValueError, match="Resource checker failed"):
+        await ingest("2406.04692", _session())
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from typing import Any
 
 from litellm import Message, acompletion
 
+from agent.context_manager.manager import summarize_messages
 from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
@@ -41,6 +42,7 @@ async def run_sub_agent(
     session: Any,
     agent_id: str,
     agent_label: str,
+    summary_prompt: str | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """Run an agentic loop until the agent calls submit_tool_name.
 
@@ -78,7 +80,7 @@ async def run_sub_agent(
             pass
 
     _total_tokens = 0
-    _warned_context = False
+    _compacted = False
 
     for _iteration in range(_MAX_ITERATIONS):
         doom_prompt = check_for_doom_loop(messages)
@@ -93,8 +95,25 @@ async def run_sub_agent(
             await _log("Context limit reached — aborting")
             return None, False
 
-        if not _warned_context and _total_tokens >= _CONTEXT_WARN:
-            _warned_context = True
+        if not _compacted and _total_tokens >= _CONTEXT_WARN and summary_prompt is not None:
+            _compacted = True
+            await _log("Compacting context to continue")
+            _TAIL = 8
+            head = messages[:2]
+            tail = messages[-_TAIL:] if len(messages) > 2 + _TAIL else messages[2:]
+            middle = messages[2: len(messages) - _TAIL] if len(messages) > 2 + _TAIL else []
+            if middle:
+                summary_text, _ = await summarize_messages(
+                    middle,
+                    model_name=model,
+                    hf_token=getattr(session, "hf_token", None),
+                    prompt=summary_prompt,
+                    session=session,
+                    kind="replication",
+                )
+                messages = head + [Message(role="user", content=f"[Context summary]\n{summary_text}")] + tail
+        elif not _compacted and _total_tokens >= _CONTEXT_WARN:
+            _compacted = True
             messages.append(
                 Message(
                     role="user",

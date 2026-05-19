@@ -89,6 +89,25 @@ _SUBMIT_TOOL_SPEC: dict[str, Any] = {
     },
 }
 
+_SUMMARY_PROMPT = (
+    "You are summarizing a conversation in which an AI agent is verifying whether the resources "
+    "needed to replicate an ML paper are accessible. The agent checks three things: (1) whether "
+    "the paper's GitHub repo contains real runnable code or is just a placeholder, (2) whether "
+    "the datasets required to run the main evaluation exist on HuggingFace Hub and are publicly "
+    "accessible (status: available, gated, missing, or unknown), and (3) whether pretrained model "
+    "checkpoints required by the paper exist and are accessible. The agent calls a submit tool "
+    "when it has enough information to report on all resources.\n\n"
+    "Summarize what has happened in this conversation so far. Include:\n"
+    "- The paper being checked: arxiv_id and github_url\n"
+    "- Repository findings: whether the repo has real code, missing scripts, or other issues\n"
+    "- Every dataset checked: name, HuggingFace ID if found, availability status, and any notes\n"
+    "- Every model/checkpoint checked: name, HuggingFace ID if found, availability status, and any notes\n"
+    "- What still needs to be verified before submit_resource_report can be called\n"
+    "This summary will replace the full conversation history and must contain everything the "
+    "agent needs to finish checking resources and submit."
+    "Include important details, it is better to give too much information than too little."
+)
+
 _SYSTEM_PROMPT = """\
 You are a resource checker agent for ML paper replication. Your job is to verify
 that the resources needed to replicate a paper are available before any compute
@@ -149,6 +168,7 @@ async def run_resource_checker(
         session=session,
         agent_id=agent_id,
         agent_label=f"resource-checker: {arxiv_id}",
+        summary_prompt=_SUMMARY_PROMPT,
     )
 
     if not ok or result is None:

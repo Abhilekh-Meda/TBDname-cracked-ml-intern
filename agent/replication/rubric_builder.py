@@ -1,8 +1,8 @@
-"""Rubric builder agent — generates a replication rubric tree by  paper and repo exploration.
+"""Rubric builder agent — generates a replication rubric tree by paper and repo exploration.
 
 The agent works layer by layer: it expands the current frontier of nodes, submitting each
-layer via submit_layer, which continues the loop rather than terminating it. Thes loop ends
-when every node in the frontier is a leaf (has a check command and no children to expand).
+layer via submit_layer, which continues the loop rather than terminating it. The loop ends
+when every node in the frontier is a leaf (no children to expand).
 """
 
 import json
@@ -12,6 +12,7 @@ from typing import Any
 
 from litellm import Message, acompletion
 
+from agent.context_manager.manager import summarize_messages
 from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
@@ -27,6 +28,38 @@ _SUBMIT_LAYER_TOOL = "submit_layer"
 _MAX_ITERATIONS = 60
 _CONTEXT_WARN = 170_000
 _CONTEXT_MAX = 190_000
+
+_SUMMARY_PROMPT = (
+    "You are summarizing a conversation in which an AI agent is building a replication rubric "
+    "for an ML paper. The agent's job is to decompose 'replicate <paper>' into a tree of "
+    "verifiable sub-tasks, layer by layer. Each node in the tree has an ID and a description "
+    "of what it verifies. Internal nodes group related sub-tasks; leaf nodes are atomic — "
+    "specific enough that an LLM judge can read experiment outputs and say pass or fail. "
+    "The agent expands the tree one layer at a time: it reads the paper and repo, then submits "
+    "children for each node in the current 'frontier' (the set of nodes that exist but have not "
+    "yet been expanded). When all frontier nodes are leaves, the rubric is complete.\n\n"
+    "Summarize what has happened in this conversation so far. Include:\n"
+    "- The paper being replicated: title, arxiv_id, github_url, and key reported metrics\n"
+    "- Every rubric node created so far: its ID, description, and whether it is a leaf or internal\n"
+    "- The current frontier: the IDs and descriptions of nodes that still need to be expanded\n"
+    "- Key findings from reading the paper or repo that should inform how remaining nodes are expanded\n"
+    "This summary will replace the full conversation history and must contain everything the "
+    "agent needs to continue expanding the frontier and completing the rubric."
+)
+
+
+class RubricBuildError(Exception):
+    """Raised when the rubric builder cannot complete the rubric tree.
+
+    Carries the partial rubric tree and the unexpanded frontier so the caller
+    can inspect what was built and potentially retry from where it stopped.
+    """
+
+    def __init__(self, message: str, partial_rubric: RubricNode, frontier: list[RubricNode]):
+        super().__init__(message)
+        self.partial_rubric = partial_rubric
+        self.frontier = frontier
+
 
 _SUBMIT_LAYER_SPEC: dict[str, Any] = {
     "type": "function",
@@ -167,28 +200,6 @@ def _apply_expansions(
                 continue
     return new_frontier
 
-def _fallback_rubric(reading: PaperReading) -> RubricNode:
-    """Minimal two-node rubric used when the builder agent fails."""
-    primary = reading.metrics[0]
-    threshold = primary.value * 0.95
-    root = RubricNode(id="root", description=f"Replicate {reading.title}")
-    root.children = [
-        RubricNode(
-            id="env",
-            description="Environment and dependencies install without errors",
-            parent_id="root",
-        ),
-        RubricNode(
-            id="result",
-            description=(
-                f"{primary.name} >= {threshold:.4f} on {primary.dataset} "
-                f"(paper reports {primary.value})"
-            ),
-            parent_id="root",
-        ),
-    ]
-    return root
-
 
 def _pick_model(main_model: str) -> str:
     if main_model.startswith("anthropic/"):
@@ -196,6 +207,31 @@ def _pick_model(main_model: str) -> str:
     if main_model.startswith("bedrock/") and "anthropic" in main_model:
         return "bedrock/us.anthropic.claude-sonnet-4-6"
     return main_model
+
+
+async def _compact_messages(
+    messages: list[Message],
+    model: str,
+    hf_token: str | None,
+    session: Any,
+) -> list[Message]:
+    """Summarize the middle of the message history, keeping system + first user + recent tail."""
+    _TAIL = 8
+    head = messages[:2]
+    tail = messages[-_TAIL:] if len(messages) > 2 + _TAIL else messages[2:]
+    middle = messages[2: len(messages) - _TAIL] if len(messages) > 2 + _TAIL else []
+    if not middle:
+        return messages
+    summary_text, _ = await summarize_messages(
+        middle,
+        model_name=model,
+        hf_token=hf_token,
+        prompt=_SUMMARY_PROMPT,
+        session=session,
+        kind="replication",
+    )
+    summary_msg = Message(role="user", content=f"[Context summary]\n{summary_text}")
+    return head + [summary_msg] + tail
 
 
 async def run_rubric_builder(
@@ -207,7 +243,7 @@ async def run_rubric_builder(
     """Build a rubric tree by having an agent explore the paper and repo layer by layer.
 
     The agent expands nodes one layer at a time via submit_layer calls. The loop terminates
-    when every frontier node is a leaf. Falls back to a minimal template if the agent fails.
+    when every frontier node is a leaf. Raises RubricBuildError if the agent fails.
     """
     agent_id = "rubric-builder"
     agent_label = f"rubric-builder: {arxiv_id}"
@@ -255,7 +291,7 @@ async def run_rubric_builder(
     ]
 
     _total_tokens = 0
-    _warned_context = False
+    _compacted = False
 
     for _iteration in range(_MAX_ITERATIONS):
         doom_prompt = check_for_doom_loop(messages)
@@ -264,19 +300,13 @@ async def run_rubric_builder(
             messages.append(Message(role="user", content=doom_prompt))
 
         if _total_tokens >= _CONTEXT_MAX:
-            await _log("Context limit reached — returning partial rubric")
-            break
+            raise RubricBuildError("Context limit reached after compaction", root, frontier)
 
-        if not _warned_context and _total_tokens >= _CONTEXT_WARN:
-            _warned_context = True
-            messages.append(
-                Message(
-                    role="user",
-                    content=(
-                        "[SYSTEM: 75% of context used. Mark remaining frontier nodes as leaves "
-                        "with best-effort descriptions and call submit_layer now.]"
-                    ),
-                )
+        if not _compacted and _total_tokens >= _CONTEXT_WARN:
+            _compacted = True
+            await _log("Compacting context to continue")
+            messages = await _compact_messages(
+                messages, model, getattr(session, "hf_token", None), session
             )
 
         try:
@@ -305,7 +335,7 @@ async def run_rubric_builder(
                 logger.debug("rubric builder telemetry failed: %s", _telem_err)
         except Exception as e:
             logger.error("Rubric builder LLM error: %s", e)
-            break
+            raise RubricBuildError(f"LLM error: {e}", root, frontier)
 
         if response.usage:
             _total_tokens = response.usage.total_tokens
@@ -397,5 +427,4 @@ async def run_rubric_builder(
                     )
                 )
 
-    await _log("Iteration limit reached — returning partial rubric")
-    return root if root.children else _fallback_rubric(reading)
+    raise RubricBuildError("Iteration limit reached", root, frontier)

@@ -75,7 +75,7 @@ async def ingest(paper_input: str, session: Any) -> PaperTask:
 
     report = await run_resource_checker(arxiv_id, reading.github_url, session)
     if report is None:
-        report = ResourceReport(repo_ready=False, repo_notes="Resource check failed.")
+        raise ValueError(f"Resource checker failed for arxiv_id: {arxiv_id}")
 
     metadata, rubric = await asyncio.gather(
         _fetch_paper_metadata(arxiv_id),
