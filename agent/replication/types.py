@@ -56,6 +56,18 @@ class ResourceInfo:
 
 
 @dataclass
+class PaperContext:
+    """Full paper content fetched deterministically before any agent runs."""
+
+    arxiv_id: str
+    title: str
+    github_url: str  # from HF metadata; may need LLM validation
+    authors: str
+    abstract: str
+    full_text: str  # all sections concatenated
+
+
+@dataclass
 class MetricResult:
     name: str
     value: float
