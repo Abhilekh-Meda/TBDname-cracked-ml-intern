@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 _CONTEXT_WARN = 170_000
 _CONTEXT_MAX = 190_000
-_MAX_ITERATIONS = 60
+_MAX_ITERATIONS = 120
 
 
 def _pick_model(main_model: str) -> str:
@@ -136,7 +136,7 @@ async def run_sub_agent(
                 tools=_tools,
                 tool_choice="auto",
                 stream=False,
-                timeout=120,
+                timeout=600,
                 **llm_params,
             )
             try:

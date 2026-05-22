@@ -347,7 +347,7 @@ async def research_handler(
                     messages=_msgs,
                     tools=None,  # no tools — force text response
                     stream=False,
-                    timeout=120,
+                    timeout=600,
                     **llm_params,
                 )
                 # Telemetry is best-effort; a logging blip must never mask a
@@ -398,7 +398,7 @@ async def research_handler(
                 tools=_tools,
                 tool_choice="auto",
                 stream=False,
-                timeout=120,
+                timeout=600,
                 **llm_params,
             )
             try:
@@ -514,7 +514,7 @@ async def research_handler(
             messages=_msgs,
             tools=None,
             stream=False,
-            timeout=120,
+            timeout=600,
             **llm_params,
         )
         try:

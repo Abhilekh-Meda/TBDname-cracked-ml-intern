@@ -124,7 +124,7 @@ def _make_session(model: str, hf_token: str | None, tool_router, events: list, o
         ts = datetime.now(timezone.utc).isoformat()
         record = {"ts": ts, "type": event.event_type, **(event.data or {})}
         events.append(record)
-        with events_path.open("a") as f:
+        with (out_dir / "agent_events.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
         _print_event(ts, event)
 
@@ -173,13 +173,13 @@ async def run(paper_input: str, model: str):
     arxiv_id = normalize_arxiv_id(paper_input) or paper_input.strip()
 
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    out_dir = Path(__file__).parent / "runs" / f"{timestamp}-{arxiv_id}-rc"
+    out_dir = Path(__file__).parent / "runs" / f"{timestamp}-{arxiv_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     events: list[dict] = []
-    litellm.callbacks = [_LLMCallLogger(out_dir / "llm_calls.jsonl")]
+    litellm.callbacks = [_LLMCallLogger(out_dir / "llm_call_trace.jsonl")]
 
-    (out_dir / "input.json").write_text(json.dumps(
+    (out_dir / "run_config.json").write_text(json.dumps(
         {"arxiv_id": arxiv_id, "model": model, "timestamp": timestamp}, indent=2
     ))
 
@@ -197,7 +197,7 @@ async def run(paper_input: str, model: str):
     elapsed = time.monotonic() - t0
     _print_stage("fetch_paper_context", elapsed)
 
-    (out_dir / "paper_context.json").write_text(json.dumps(_to_dict(ctx), indent=2))
+    (out_dir / "fetched_paper_context.json").write_text(json.dumps(_to_dict(ctx), indent=2))
     print(f"  title:   {ctx.title}")
     print(f"  github:  {ctx.github_url or '(none)'}")
     print(f"  authors: {ctx.authors[:80]}")

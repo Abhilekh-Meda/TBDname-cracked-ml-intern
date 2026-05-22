@@ -326,7 +326,7 @@ async def run_rubric_builder(
                 tools=_tools,
                 tool_choice="auto",
                 stream=False,
-                timeout=120,
+                timeout=600,
                 **llm_params,
             )
             try:
