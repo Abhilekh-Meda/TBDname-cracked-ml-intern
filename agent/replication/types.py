@@ -50,7 +50,7 @@ class ResourceInfo:
     name: str
     status: ResourceStatus
     hf_id: Optional[str] = None
-    notes: str = ""
+    source_evidence: str = ""  # where in the paper this resource was found/cited
     source_url: str = ""
     size_hint: str = ""
 
@@ -88,8 +88,10 @@ class PaperReading:
 class ResourceReport:
     """Structured output of the resource checker agent."""
 
-    repo_ready: bool
-    repo_notes: str
+    github_url: str
+    github_url_evidence: str
+    repo_runnable: bool
+    repo_runnable_evidence: str
     datasets: list[ResourceInfo] = field(default_factory=list)
     models: list[ResourceInfo] = field(default_factory=list)
 

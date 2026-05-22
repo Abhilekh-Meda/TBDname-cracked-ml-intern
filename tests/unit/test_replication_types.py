@@ -111,7 +111,7 @@ def test_resource_status_round_trips_from_string():
 def test_resource_info_defaults():
     r = ResourceInfo(name="ImageNet", status=ResourceStatus.AVAILABLE)
     assert r.hf_id is None
-    assert r.notes == ""
+    assert r.source_evidence == ""
     assert r.source_url == ""
     assert r.size_hint == ""
 
